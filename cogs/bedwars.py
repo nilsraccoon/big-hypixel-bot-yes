@@ -5,6 +5,7 @@ import dotenv
 import requests
 import os
 from colorama import Fore
+import sqlite3
 
 dotenv.load_dotenv()
 
@@ -12,46 +13,56 @@ dotenv.load_dotenv()
 class Bedwars(commands.Cog, name="bedwars"):
     def __init__(self, bot) -> None:
         self.bot = bot
+        self.conn = sqlite3.connect("player_cache.db")
+        self.c = self.conn.cursor()
+        self.c.execute(
+            """CREATE TABLE IF NOT EXISTS player_cache
+                          (uuid TEXT PRIMARY KEY, name TEXT)"""
+        )
 
     @commands.hybrid_command(
         name="bedwars", description="Shows the Bedwars stats of a player"
     )
     async def bedwars(self, context: Context, player: str) -> None:
+        await context.interaction.response.defer()
         """
         This command shows the Bedwars stats of a player
         :param player: The player's name
         """
-        # Convert the players name to uuid
-        headers = {"Api-Key": os.getenv("POLSU")}
+        headers = {"Api-Key": os.getenv("POLSU"), "User-Agent": os.getenv("USER_AGENT")}
+        self.c.execute("SELECT uuid FROM player_cache WHERE name = ?", (player,))
+        cached_uuid = self.c.fetchone()
+        if cached_uuid:
+            uuid = cached_uuid[0]
+        else:
+            try:
+                request = requests.get(
+                    f"https://api.polsu.xyz/polsu/minecraft/player?player={player}",
+                    headers=headers,
+                ).json()
+                uuid = request["data"]["uuid"]
+                self.c.execute("INSERT INTO player_cache VALUES (?, ?)", (uuid, player))
+                self.conn.commit()
+            except Exception as e:
+                embed = discord.Embed(
+                    title="Error",
+                    description="An error occured trying to convert the username to a UUID.\nAre you sure that player exists?",
+                    color=discord.Color.red(),
+                )
+                await context.send(embed=embed)
+                print(
+                    f"{Fore.RED}An error occured in {context.author.guild.name} with command /{context.invoked_with} {player} trying to get uuid from username:\n{e}{Fore.WHITE}"
+                )
+                return
+
         try:
-
-            request = requests.get(
-                f"https://api.polsu.xyz/polsu/minecraft/player?player={player}",
-                headers=headers,
-            ).json()
-            uuid = request["data"]["uuid"]
-        except Exception as e:
-
-            embed = discord.Embed(
-                title="Error",
-                description="An error occured trying to convert the username to a UUID.\nAre you sure that player exists?",
-                color=discord.Color.red(),
-            )
-            await context.send(embed=embed)
-            print(
-                f"{Fore.RED}An error occured in {context.author.guild.name} with command /{context.invoked_with} {player} trying to get uuid from username:\n{e}{Fore.WHITE}"
-            )
-            return
-        await context.interaction.response.defer()
-        try:
-
             apikey = os.getenv("HYPIXEL")
             request = requests.get(
                 f"https://api.hypixel.net/v2/player?uuid={uuid}&key={apikey}"
             ).json()
-            bwstats = request["player"]["stats"]["Bedwars"]
+            bwstats = request["player"]["stats"].get("Bedwars", {})
 
-            wins = round(bwstats["wins_bedwars"])
+            wins = round(bwstats.get("wins_bedwars", 0))
             losses = round(bwstats.get("losses_bedwars", 0))
             wlr = round(wins / losses, 2) if losses != 0 else wins
 
@@ -87,6 +98,66 @@ class Bedwars(commands.Cog, name="bedwars"):
             print(
                 f"{Fore.RED}An error occured in {context.author.guild.name} with command /{context.invoked_with} {player} trying to get hypixel stats:\n{e}{Fore.WHITE}"
             )
+
+    @commands.hybrid_command(
+        name="winstreak", description="Shows the winstreakss of a player"
+    )
+    async def winstreak(self, context: Context, player: str) -> None:
+        """
+        This command shows the Bedwars stats of a player
+        :param player: The player's name
+        """
+        headers = {"Api-Key": os.getenv("POLSU"), "User-Agent": os.getenv("USER_AGENT")}
+        self.c.execute("SELECT uuid FROM player_cache WHERE name = ?", (player,))
+        cached_uuid = self.c.fetchone()
+        if cached_uuid:
+            uuid = cached_uuid[0]
+        else:
+            try:
+                request = requests.get(
+                    f"https://api.polsu.xyz/polsu/minecraft/player?player={player}",
+                    headers=headers,
+                ).json()
+                uuid = request["data"]["uuid"]
+                self.c.execute("INSERT INTO player_cache VALUES (?, ?)", (uuid, player))
+                self.conn.commit()
+            except Exception as e:
+                embed = discord.Embed(
+                    title="Error",
+                    description="An error occured trying to convert the username to a UUID.\nAre you sure that player exists?",
+                    color=discord.Color.red(),
+                )
+                await context.send(embed=embed)
+                print(
+                    f"{Fore.RED}An error occured in {context.author.guild.name} with command /{context.invoked_with} {player} trying to get uuid from username:\n{e}{Fore.WHITE}"
+                )
+                return
+        try:
+            apikey = os.getenv("HYPIXEL")
+            request = requests.get(
+                f"https://api.hypixel.net/v2/player?uuid={uuid}&key={apikey}"
+            ).json()
+            ws_bw = request["player"]["stats"].get("Bedwars", {}).get("winstreak", 0)
+            ws_duels = (
+                request["player"]["stats"].get("Duels", {}).get("current_winstreak", 0)
+            )
+            ws_sw = request["player"]["stats"].get("SkyWars", {}).get("winstreak", 0)
+            ws_tnt = request["player"]["stats"].get("TNTGames", {}).get("winstreak", 0)
+            ws_uhc = request["player"]["stats"].get("UHC", {}).get("winstreak", 0)
+            embed = discord.Embed(
+                title=f"Winstreaks for {player}",
+                description=f"Bedwars: {ws_bw}\nDuels: {ws_duels}\nSkywars: {ws_sw}\nTNT Games: {ws_tnt}\nUHC: {ws_uhc}",
+                color=discord.Color.green(),
+            )
+            await context.send(embed=embed)
+        except Exception as e:
+            print(
+                f"{Fore.RED}An error occured in {context.author.guild.name} with command /{context.invoked_with} {player} trying to get hypixel stats:\n{e}{Fore.WHITE}"
+            )
+            return
+
+    def cog_unload(self):
+        self.conn.close()
 
 
 async def setup(bot) -> None:
